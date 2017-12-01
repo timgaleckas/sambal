@@ -1,75 +1,183 @@
 # encoding: UTF-8
 
-require 'logger'
-require 'pty'
-require 'expect'
-
 module Sambal
   class Client
-
-    attr_reader :connected
-
-    def parsed_options(user_options)
-      default_options = {
-        domain: 'WORKGROUP',
-        host: '127.0.0.1',
-        share: '',
-        user: 'guest',
-        password: false,
-        port: 445,
-        timeout: 10,
-        columns: 80
-      }
-
-      options = default_options.merge(user_options)
-      options[:ip_address] ||= options[:host] if options[:host] == default_options[:host]
-      options
+    class NullStream
+      def self.<<(o); self; end
     end
 
-    def initialize(user_options={})
-      begin
-        options = parsed_options(user_options)
-        @timeout = options[:timeout].to_i
+    attr_reader :connected, :current_dir
 
-        option_flags = "-W \"#{options[:domain]}\" -U \"#{options[:user]}\""
-        option_flags = "#{option_flags} -I #{options[:ip_address]}" if options[:ip_address]
-        option_flags = "#{option_flags} -p #{options[:port]} -s /dev/null"
-        password = options[:password] ? "'#{options[:password]}'" : "--no-pass"
-        command = "COLUMNS=#{options[:columns]} smbclient \"//#{options[:host]}/#{options[:share]}\" #{password}"
+    SAMBA_PROMPT = /^.*smb: [^\n]*\\> $/
 
-        @output, @input, @pid = PTY.spawn(command + ' ' + option_flags)
+    DEFAULT_OPTIONS = {
+      domain: 'WORKGROUP',
+      host: '127.0.0.1',
+      share: '',
+      user: 'guest',
+      port: 445,
+      connection_timeout: 30,
+      timeout: 60,
+      columns: 80,
+      logger: Logger.new('/dev/null'),
+      transcript: NullStream
+    }
 
-        res = @output.expect(/(.*\n)?smb:.*\\>/, @timeout)[0] rescue nil
-        @connected = case res
-        when nil
-          false
-        when /^put/
-          res['putting'].nil? ? false : true
-        else
-          if res['NT_STATUS']
-            false
-          elsif res['timed out'] || res['Server stopped']
-            false
-          else
-            true
-          end
-        end
+    def initialize(options={})
+      options = DEFAULT_OPTIONS.merge(options)
 
-        unless @connected
-          close if @pid
-          raise 'Failed to connect'
-        end
-      rescue => e
-        raise RuntimeError, "Unknown Process Failed!! (#{$!.to_s}): #{e.message.inspect}\n"+e.backtrace.join("\n")
+      password = options[:password] ? "'#{options[:password]}'" : "--no-pass"
+      command = "COLUMNS=#{options[:columns]} smbclient \"//#{options[:host]}/#{options[:share]}\" #{password}"
+      command += " -W \"#{options[:domain]}\" -U \"#{options[:user]}\""
+      command += " -I #{options[:ip_address]}" if options[:ip_address]
+      command += " -p #{options[:port]} -s /dev/null"
+
+      @smbclient = Amberletters::Process.new(command,
+                                             timeout: [options[:timeout], options[:connection_timeout]].max,
+                                             logger: options[:logger],
+                                             transcript: options[:transcript])
+
+      @smbclient.start!
+
+      connection_timeout_trigger = @smbclient.on(:timeout, options[:connection_timeout]) do
+        raise 'Connection Timeout'
+      end
+
+      @smbclient.wait_for(:output, /(#{SAMBA_PROMPT}|NT_[A-Z_]*)/) do |trigger, process, match_data|
+        raise match_data[1] if match_data[1] =~ /NT_/
+        @smbclient.remove_trigger(connection_timeout_trigger)
+      end
+
+      @current_dir = '\\'
+    end
+
+    def ls(qualifier = '*', opts={})
+      parse_files(ask_wrapped('ls', qualifier, opts))
+    end
+
+    def exists?(path, opts={})
+      ls(path, opts).key? File.basename(path)
+    end
+
+    def cd(dir, opts={})
+      response = ask("cd \"#{dir}\"", opts)
+      if response =~ /NT_STATUS_OBJECT_NAME_NOT_FOUND/
+        Response.new(response, false)
+      else
+        Response.new(response, true)
       end
     end
 
-    def logger
-      @logger ||= Logger.new(STDOUT)
+    def get(filename, output, opts={})
+      file_context(filename) do |file|
+        response = ask_wrapped 'get', [file, output], opts
+        if response =~ /^getting\sfile.*$/
+          Response.new(response, true)
+        else
+          Response.new(response, false)
+        end
+      end
     end
 
-    def logger=(l)
-      @logger = l
+    def put(file, destination, opts={})
+      response = ask_wrapped 'put', [file, destination], opts
+      if response =~ /^putting\sfile.*$/
+        Response.new(response, true)
+      else
+        Response.new(response, false)
+      end
+    end
+
+    def put_content(content, destination, opts={})
+      t = Tempfile.new("upload-smb-content-#{destination}")
+      File.open(t.path, 'w') do |f|
+        f << content
+      end
+      response = ask_wrapped 'put', [t.path, destination], opts
+      if response =~ /^putting\sfile.*$/
+        Response.new(response, true)
+      else
+        Response.new(response, false)
+      end
+    ensure
+      t.close
+    end
+
+    def mkdir(directory, opts={})
+      return Response.new('directory name is empty', false) if directory.strip.empty?
+      response = ask_wrapped('mkdir', directory, opts)
+      if response =~ /NT_STATUS_OBJECT_NAME_(INVALID|COLLISION)/
+        Response.new(response, false)
+      else
+        Response.new(response, true)
+      end
+    end
+
+    def rmdir(dir, opts={})
+      response = cd dir, opts
+      return response if response.failure?
+      ls('*', opts).reject{|name, meta| %w(. ..).include?(name) }.each do |name, meta|
+        response = case meta[:type]
+                   when :file
+                     del name, opts
+                   when :directory
+                     rmdir name, opts
+                   else
+                     raise 'whoops'
+                   end
+        return response if response.failure?
+      end
+      response = cd '..', opts
+      return response if response.failure?
+      response = ask_wrapped 'rmdir', dir, opts
+      Response.new(response, true)
+    end
+
+    def del(filename, opts={})
+      file_context(filename) do |file|
+        response = ask_wrapped 'del', file, opts
+        case
+        when response =~ /NT_STATUS_NO_SUCH_FILE/
+          Response.new(response, false)
+        else
+          Response.new(response, true)
+        end
+      end
+    end
+
+    def close
+      @smbclient.kill!
+    end
+
+    private
+
+    def ask(cmd, opts)
+      @smbclient << "#{cmd}\n"
+      response = nil
+      _m = nil
+
+      command_timeout = cmd_timeout(@smbclient, opts[:timeout])
+
+      @smbclient.wait_for(:output, SAMBA_PROMPT) do |trigger, process, match_data|
+        @smbclient.remove_trigger(command_timeout)
+        lines = match_data.string.split("\r\n").reverse
+        @current_dir = lines.first.match(/^smb: (.*)> $/)[1]
+        response = lines[1..-1].take_while{|l| !(l=~/^smb: /)}.reverse.join("\r\n")
+      end
+      response
+    end
+
+    def cmd_timeout(client, timeout)
+      return unless timeout
+      raise 'Command Timeout must not exceed client timeout' if timeout > client.timeout
+      client.on(:timeout, timeout) do |trigger, process|
+        process.remove_trigger(trigger)
+        raise 'Command Timeout'
+      end
+    end
+
+    def ask_wrapped(cmd,filenames, opts)
+      ask wrap_filenames(cmd,filenames), opts
     end
 
     def file_context(path)
@@ -88,173 +196,6 @@ module Sambal
           subdirs.times { cd '..' }
         end
       end
-    end
-
-    def ls(qualifier = '*')
-      parse_files(ask_wrapped('ls', qualifier))
-    end
-
-    def exists?(path)
-      ls(path).key? File.basename(path)
-    end
-
-    def cd(dir)
-      response = ask("cd \"#{dir}\"")
-      if response.split("\r\n").join('') =~ /NT_STATUS_OBJECT_NAME_NOT_FOUND/
-        Response.new(response, false)
-      else
-        Response.new(response, true)
-      end
-    end
-
-    def get(filename, output)
-      begin
-        file_context(filename) do |file|
-          response = ask_wrapped 'get', [file, output]
-          if response =~ /^getting\sfile.*$/
-            Response.new(response, true)
-          else
-            Response.new(response, false)
-          end
-        end
-      rescue InternalError => e
-        Response.new(e.message, false)
-      end
-    end
-
-    def put(file, destination)
-      response = ask_wrapped 'put', [file, destination]
-      if response =~ /^putting\sfile.*$/
-        Response.new(response, true)
-      else
-        Response.new(response, false)
-      end
-    rescue InternalError => e
-      Response.new(e.message, false)
-    end
-
-    def put_content(content, destination)
-      t = Tempfile.new("upload-smb-content-#{destination}")
-      File.open(t.path, 'w') do |f|
-        f << content
-      end
-      response = ask_wrapped 'put', [t.path, destination]
-      if response =~ /^putting\sfile.*$/
-        Response.new(response, true)
-      else
-        Response.new(response, false)
-      end
-    rescue InternalError => e
-      Response.new(e.message, false)
-    ensure
-      t.close
-    end
-
-    def mkdir(directory)
-      return Response.new('directory name is empty', false) if directory.strip.empty?
-      response = ask_wrapped('mkdir', directory)
-      if response =~ /NT_STATUS_OBJECT_NAME_(INVALID|COLLISION)/
-        Response.new(response, false)
-      else
-        Response.new(response, true)
-      end
-    end
-
-    def rmdir(dir)
-      response = cd dir
-      return response if response.failure?
-      begin
-        ls.each do |name, meta|
-          if meta[:type]==:file
-            response = del name
-          elsif meta[:type]==:directory && !(name =~ /^\.+$/)
-            response = rmdir(name)
-          end
-          raise InternalError.new response.message if response && response.failure?
-        end
-        cd '..'
-        response = ask_wrapped 'rmdir', dir
-        next_line = response.split("\n")[1]
-        if next_line =~ /^smb:.*\\>/
-          Response.new(response, true)
-        else
-          Response.new(response, false)
-        end
-      rescue InternalError => e
-        Response.new(e.message, false)
-      end
-    end
-
-    def del(filename)
-      begin
-        file_context(filename) do |file|
-          response = ask_wrapped 'del', file
-          next_line = response.split("\n")[1]
-          if next_line =~ /^smb:.*\\>/
-          Response.new(response, true)
-          #elsif next_line =~ /^NT_STATUS_NO_SUCH_FILE.*$/
-          #  Response.new(response, false)
-          #elsif next_line =~ /^NT_STATUS_ACCESS_DENIED.*$/
-          #  Response.new(response, false)
-          else
-            Response.new(response, false)
-          end
-        end
-      rescue InternalError => e
-        Response.new(e.message, false)
-      end
-      #end
-      #if (path_parts = file.split('/')).length>1
-      #  file = path_parts.pop
-      #  subdirs = path_parts.length
-      #  dir = path_parts.join('/')
-      #  cd dir
-      #end
-    #  response = ask "del #{file}"
-    #  next_line = response.split("\n")[1]
-    #  if next_line =~ /^smb:.*\\>/
-    #    Response.new(response, true)
-    #  #elsif next_line =~ /^NT_STATUS_NO_SUCH_FILE.*$/
-    #  #  Response.new(response, false)
-    #  #elsif next_line =~ /^NT_STATUS_ACCESS_DENIED.*$/
-    #  #  Response.new(response, false)
-    #  else
-    #    Response.new(response, false)
-    #  end
-    #rescue InternalError => e
-    #  Response.new(e.message, false)
-    #ensure
-    #  unless subdirs.nil?
-    #    subdirs.times { cd '..' }
-    #  end
-    end
-
-    def close
-      @input.close
-      @output.close
-      Process.wait(@pid)
-      @connected = false
-    end
-
-    def ask(cmd)
-      @input.printf("#{cmd}\n")
-      response = @output.expect(/^smb:.*\\>/,@timeout)[0] rescue nil
-      if response.nil?
-        $stderr.puts "Failed to do #{cmd}"
-        raise "Failed to do #{cmd}"
-      else
-        response
-      end
-    end
-
-    def ask_wrapped(cmd,filenames)
-      ask wrap_filenames(cmd,filenames)
-    end
-
-    def wrap_filenames(cmd,filenames)
-      filenames = [filenames] unless filenames.kind_of?(Array)
-      filenames.map!{ |filename| "\"#{filename}\"" }
-      [cmd,filenames].flatten.join(' ')
     end
 
     # Parse output from Client#ls
@@ -284,6 +225,12 @@ module Sambal
         files
       end
       Hash[listing.sort]
+    end
+
+    def wrap_filenames(cmd,filenames)
+      filenames = [filenames] unless filenames.kind_of?(Array)
+      filenames.map!{ |filename| "\"#{filename}\"" }
+      [cmd,filenames].flatten.join(' ')
     end
   end
 end

@@ -12,40 +12,39 @@ describe Sambal::Client do
   TEST_DIRECTORY = 'testdir'
   TEST_SUB_DIRECTORY = 'testdir_sub'
   SUB_DIRECTORY_PATH = "#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}"
-  TESTFILE = 'testfile.txt'
+  TESTFILE  = 'testfile.txt'
   TESTFILE2 = 'testfile.tx'
   TESTFILE3 = 'testfil.txt'
   TESTFILE_SUB = 'testfile_sub.txt'
   TESTFILE_SUB_PATH = "#{SUB_DIRECTORY_PATH}/#{TESTFILE_SUB}"
 
   before(:all) do
-    @sambal_client = described_class.new(host: test_server.host, share: test_server.share_name, port: test_server.port)
+    @sambal_client = described_class.new(host: $test_server.host, share: $test_server.share_name, port: $test_server.port, logger: $logger, connection_timeout: 1)
   end
 
   before(:each) do
-    File.open("#{test_server.share_path}/#{TESTFILE}", 'w') do |f|
+    FileUtils.rm_f($test_server.share_path)
+    FileUtils.mkdir_p($test_server.share_path)
+    File.open("#{$test_server.share_path}/#{TESTFILE}", 'w') do |f|
       f << "Hello"
     end
-    FileUtils.mkdir_p "#{test_server.share_path}/#{TEST_DIRECTORY_WITH_SPACE_IN_NAME}"
-    FileUtils.mkdir_p "#{test_server.share_path}/#{TEST_DIRECTORY_WITH_CONSECUTIVE_SPACES_IN_NAME}"
-    File.open("#{test_server.share_path}/#{TEST_DIRECTORY_WITH_SPACE_IN_NAME}/#{TEST_FILE_IN_DIRECTORY_WITH_SPACE_IN_NAME}", 'w') do |f|
+    FileUtils.mkdir_p "#{$test_server.share_path}/#{TEST_DIRECTORY_WITH_SPACE_IN_NAME}"
+    FileUtils.mkdir_p "#{$test_server.share_path}/#{TEST_DIRECTORY_WITH_CONSECUTIVE_SPACES_IN_NAME}"
+    File.open("#{$test_server.share_path}/#{TEST_DIRECTORY_WITH_SPACE_IN_NAME}/#{TEST_FILE_IN_DIRECTORY_WITH_SPACE_IN_NAME}", 'w') do |f|
       f << "Hello there"
     end
-    FileUtils.mkdir_p "#{test_server.share_path}/#{TEST_DIRECTORY}"
-    FileUtils.mkdir_p "#{test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}"
-    File.open("#{test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}/#{TESTFILE_SUB}", 'w') do |f|
+    FileUtils.mkdir_p "#{$test_server.share_path}/#{TEST_DIRECTORY}"
+    FileUtils.mkdir_p "#{$test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}"
+    File.open("#{$test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}/#{TESTFILE_SUB}", 'w') do |f|
       f << "Hello"
     end
-    FileUtils.chmod 0777, "#{test_server.share_path}/#{TEST_DIRECTORY_WITH_SPACE_IN_NAME}/#{TEST_FILE_IN_DIRECTORY_WITH_SPACE_IN_NAME}"
-    FileUtils.chmod 0777, "#{test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}/#{TESTFILE_SUB}"
-    FileUtils.chmod 0777, "#{test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}"
-    FileUtils.chmod 0777, "#{test_server.share_path}/#{TEST_DIRECTORY}"
-    FileUtils.chmod 0777, "#{test_server.share_path}/#{TESTFILE}"
+    FileUtils.chmod 0777, "#{$test_server.share_path}/#{TEST_DIRECTORY_WITH_SPACE_IN_NAME}/#{TEST_FILE_IN_DIRECTORY_WITH_SPACE_IN_NAME}"
+    FileUtils.chmod 0777, "#{$test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}/#{TESTFILE_SUB}"
+    FileUtils.chmod 0777, "#{$test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}"
+    FileUtils.chmod 0777, "#{$test_server.share_path}/#{TEST_DIRECTORY}"
+    FileUtils.chmod 0777, "#{$test_server.share_path}/#{TESTFILE}"
     @sambal_client.cd('/')
-  end
-
-  after(:each) do
-    FileUtils.rm_rf "#{test_server.share_path}/*"
+    expect(@sambal_client.current_dir).to eq('\\')
   end
 
   after(:all) do
@@ -60,10 +59,22 @@ describe Sambal::Client do
     t
   end
 
+  describe 'new' do
+    it 'should raise an exception if the port is unreachable' do
+      expect{ described_class.new(host: $test_server.host, share: $test_server.share_name, port: $test_server.port + 1) }.to raise_error('NT_STATUS_CONNECTION_REFUSED')
+    end
+    it 'should raise an exception if the port is unreachable' do
+      expect{ described_class.new(host: 'example.com', share: $test_server.share_name, port: $test_server.port, connection_timeout: 1) }.to raise_error('Connection Timeout')
+    end
+    it 'should raise an exception if the share is unreachable' do
+      expect{ described_class.new(host: $test_server.host, share: 'not_here', port: $test_server.port) }.to raise_error('NT_STATUS_BAD_NETWORK_NAME')
+    end
+  end
+
   describe 'ls' do
     before(:all) do
-      FileUtils.cp "#{test_server.share_path}/#{TESTFILE}", "#{test_server.share_path}/#{TESTFILE2}"
-      FileUtils.cp "#{test_server.share_path}/#{TESTFILE}", "#{test_server.share_path}/#{TESTFILE3}"
+      FileUtils.cp "#{$test_server.share_path}/#{TESTFILE}", "#{$test_server.share_path}/#{TESTFILE2}"
+      FileUtils.cp "#{$test_server.share_path}/#{TESTFILE}", "#{$test_server.share_path}/#{TESTFILE3}"
     end
 
     it "should list files with spaces in their names" do
@@ -104,6 +115,7 @@ describe Sambal::Client do
   describe 'mkdir' do
     before(:all) do
       @sambal_client.cd('/')
+      expect(@sambal_client.current_dir).to eq('\\')
     end
 
     it 'should create a new directory' do
@@ -150,6 +162,7 @@ describe Sambal::Client do
     expect(@sambal_client.get(TEST_SPACES_IN_NAME_PATH, "/tmp/sambal_this_file_was_in_dir_with_spaces.txt")).to be_successful
     expect(File.exists?("/tmp/sambal_this_file_was_in_dir_with_spaces.txt")).to eq true
     @sambal_client.cd(TEST_DIRECTORY_WITH_SPACE_IN_NAME)
+    expect(@sambal_client.current_dir).to eq('\\' + TEST_DIRECTORY_WITH_SPACE_IN_NAME + '\\')
     expect(File.size("/tmp/sambal_this_file_was_in_dir_with_spaces.txt")).to eq @sambal_client.ls[TEST_FILE_IN_DIRECTORY_WITH_SPACE_IN_NAME][:size].to_i
   end
 
@@ -157,6 +170,7 @@ describe Sambal::Client do
     expect(@sambal_client.get(TESTFILE_SUB_PATH, "/tmp/sambal_spec_testfile_sub.txt")).to be_successful
     expect(File.exists?("/tmp/sambal_spec_testfile_sub.txt")).to eq true
     @sambal_client.cd(SUB_DIRECTORY_PATH)
+    expect(@sambal_client.current_dir).to eq('\\' + SUB_DIRECTORY_PATH.gsub('/', '\\') + '\\')
     expect(File.size("/tmp/sambal_spec_testfile_sub.txt")).to eq @sambal_client.ls[TESTFILE_SUB][:size].to_i
   end
 
@@ -235,15 +249,15 @@ describe Sambal::Client do
   end
 
   it 'should create commands with one wrapped filename' do
-    expect(@sambal_client.wrap_filenames('cmd','file1')).to eq('cmd "file1"')
+    expect(@sambal_client.send(:wrap_filenames, 'cmd','file1')).to eq('cmd "file1"')
   end
 
   it 'should create commands with more than one wrapped filename' do
-    expect(@sambal_client.wrap_filenames('cmd',['file1','file2'])).to eq('cmd "file1" "file2"')
+    expect(@sambal_client.send(:wrap_filenames, 'cmd',['file1','file2'])).to eq('cmd "file1" "file2"')
   end
 
   it 'should create commands with pathnames instead of strings' do
-    expect(@sambal_client.wrap_filenames('cmd',[Pathname.new('file1'), Pathname.new('file2')])).to eq('cmd "file1" "file2"')
+    expect(@sambal_client.send(:wrap_filenames,'cmd',[Pathname.new('file1'), Pathname.new('file2')])).to eq('cmd "file1" "file2"')
   end
 
 end

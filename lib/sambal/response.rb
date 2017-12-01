@@ -4,13 +4,7 @@ module Sambal
     attr_reader :message
 
     def initialize(message, success)
-      msg = message.split("\n")
-      msg.each do |line|
-        if line =~ /^NT\_.*\s/
-          @message = line
-        end
-      end
-      @message ||= message
+      @message = message.split("\r\n").find{|l| l=~/^NT_/} || message
       @success = success
     end
 
