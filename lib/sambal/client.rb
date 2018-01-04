@@ -8,7 +8,7 @@ module Sambal
 
     attr_reader :connected, :current_dir
 
-    SAMBA_PROMPT = /^.*smb: [^\n]*\\> $/
+    SAMBA_PROMPT = /(.*)smb: (.*\\)>/m
 
     DEFAULT_OPTIONS = {
       domain: 'WORKGROUP',
@@ -18,7 +18,6 @@ module Sambal
       port: 445,
       connection_timeout: 30,
       timeout: 60,
-      columns: 80,
       logger: Logger.new('/dev/null'),
       transcript: NullStream
     }
@@ -27,7 +26,7 @@ module Sambal
       options = DEFAULT_OPTIONS.merge(options)
 
       password = options[:password] ? "'#{options[:password]}'" : "--no-pass"
-      command = "COLUMNS=#{options[:columns]} smbclient \"//#{options[:host]}/#{options[:share]}\" #{password}"
+      command = "TERM=xterm-256color smbclient \"//#{options[:host]}/#{options[:share]}\" #{password}"
       command += " -W \"#{options[:domain]}\" -U \"#{options[:user]}\""
       command += " -I #{options[:ip_address]}" if options[:ip_address]
       command += " -p #{options[:port]} -s /dev/null"
@@ -160,9 +159,8 @@ module Sambal
 
       @smbclient.wait_for(:output, SAMBA_PROMPT) do |trigger, process, match_data|
         @smbclient.remove_trigger(command_timeout)
-        lines = match_data.string.split("\r\n").reverse
-        @current_dir = lines.first.match(/^smb: (.*)> $/)[1]
-        response = lines[1..-1].take_while{|l| !(l=~/^smb: /)}.reverse.join("\r\n")
+        @current_dir = match_data[2]
+        response = match_data[1]
       end
       response
     end

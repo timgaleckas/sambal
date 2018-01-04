@@ -18,13 +18,12 @@ describe Sambal::Client do
   TESTFILE_SUB = 'testfile_sub.txt'
   TESTFILE_SUB_PATH = "#{SUB_DIRECTORY_PATH}/#{TESTFILE_SUB}"
 
-  before(:all) do
-    @sambal_client = described_class.new(host: $test_server.host, share: $test_server.share_name, port: $test_server.port, logger: $logger, connection_timeout: 1)
-  end
-
   before(:each) do
     FileUtils.rm_f($test_server.share_path)
     FileUtils.mkdir_p($test_server.share_path)
+    1.upto(200).each do |number|
+      FileUtils.mkdir_p("#{$test_server.share_path}/#{"x"*number}")
+    end
     File.open("#{$test_server.share_path}/#{TESTFILE}", 'w') do |f|
       f << "Hello"
     end
@@ -43,11 +42,12 @@ describe Sambal::Client do
     FileUtils.chmod 0777, "#{$test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}"
     FileUtils.chmod 0777, "#{$test_server.share_path}/#{TEST_DIRECTORY}"
     FileUtils.chmod 0777, "#{$test_server.share_path}/#{TESTFILE}"
+    @sambal_client = described_class.new(host: $test_server.host, share: $test_server.share_name, port: $test_server.port, logger: $logger, connection_timeout: 1)
     @sambal_client.cd('/')
     expect(@sambal_client.current_dir).to eq('\\')
   end
 
-  after(:all) do
+  after(:each) do
     @sambal_client.close
   end
 
@@ -113,7 +113,7 @@ describe Sambal::Client do
   end
 
   describe 'mkdir' do
-    before(:all) do
+    before(:each) do
       @sambal_client.cd('/')
       expect(@sambal_client.current_dir).to eq('\\')
     end
@@ -216,6 +216,12 @@ describe Sambal::Client do
     expect(@sambal_client.cd('..')).to be_successful
     expect(@sambal_client.ls).to_not have_key('intestdir.txt')
     expect(@sambal_client.ls).to have_key('dirtest.txt')
+  end
+
+  it "should be support directories at and above the column limit" do
+    10.upto(200).each do |number|
+      @sambal_client.cd("\\#{'x' * number}")
+    end
   end
 
   it "should delete files in subdirectory while in a higher level directory" do
