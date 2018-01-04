@@ -26,7 +26,7 @@ module Sambal
       options = DEFAULT_OPTIONS.merge(options)
 
       password = options[:password] ? "'#{options[:password]}'" : "--no-pass"
-      command = "TERM=xterm-256color smbclient \"//#{options[:host]}/#{options[:share]}\" #{password}"
+      command = "LC_CTYPE=en_US.UTF-8 TERM=xterm-256color smbclient \"//#{options[:host]}/#{options[:share]}\" #{password}"
       command += " -W \"#{options[:domain]}\" -U \"#{options[:user]}\""
       command += " -I #{options[:ip_address]}" if options[:ip_address]
       command += " -p #{options[:port]} -s /dev/null"
