@@ -4,51 +4,14 @@ require 'spec_helper'
 require 'tempfile'
 
 describe Sambal::Client do
-
-  TEST_DIRECTORY_WITH_SPACE_IN_NAME = 'my dir with spaces in name'
-  TEST_DIRECTORY_WITH_CONSECUTIVE_SPACES_IN_NAME = 'my dir with   consecutive spaces in name'
-  TEST_FILE_IN_DIRECTORY_WITH_SPACE_IN_NAME = 'a_file_in_a_dir_with_spaces_in_name'
-  TEST_SPACES_IN_NAME_PATH = "#{TEST_DIRECTORY_WITH_SPACE_IN_NAME}/#{TEST_FILE_IN_DIRECTORY_WITH_SPACE_IN_NAME}"
-  TEST_DIRECTORY = 'testdir'
-  TEST_SUB_DIRECTORY = 'testdir_sub'
-  SUB_DIRECTORY_PATH = "#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}"
-  TESTFILE  = 'testfile.txt'
-  TESTFILE2 = 'testfile.tx'
-  TESTFILE3 = 'testfil.txt'
-  TESTFILE_SUB = 'testfile_sub.txt'
-  TESTFILE_SUB_PATH = "#{SUB_DIRECTORY_PATH}/#{TESTFILE_SUB}"
-
   before(:each) do
-    FileUtils.rm_f($test_server.share_path)
+    FileUtils.rm_rf($test_server.share_path)
     FileUtils.mkdir_p($test_server.share_path)
-    1.upto(200).each do |number|
-      FileUtils.mkdir_p("#{$test_server.share_path}/#{"x"*number}")
-    end
-    File.open("#{$test_server.share_path}/#{TESTFILE}", 'w') do |f|
-      f << "Hello"
-    end
-    FileUtils.mkdir_p "#{$test_server.share_path}/#{TEST_DIRECTORY_WITH_SPACE_IN_NAME}"
-    FileUtils.mkdir_p "#{$test_server.share_path}/#{TEST_DIRECTORY_WITH_CONSECUTIVE_SPACES_IN_NAME}"
-    File.open("#{$test_server.share_path}/#{TEST_DIRECTORY_WITH_SPACE_IN_NAME}/#{TEST_FILE_IN_DIRECTORY_WITH_SPACE_IN_NAME}", 'w') do |f|
-      f << "Hello there"
-    end
-    FileUtils.mkdir_p "#{$test_server.share_path}/#{TEST_DIRECTORY}"
-    FileUtils.mkdir_p "#{$test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}"
-    File.open("#{$test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}/#{TESTFILE_SUB}", 'w') do |f|
-      f << "Hello"
-    end
-    FileUtils.chmod 0777, "#{$test_server.share_path}/#{TEST_DIRECTORY_WITH_SPACE_IN_NAME}/#{TEST_FILE_IN_DIRECTORY_WITH_SPACE_IN_NAME}"
-    FileUtils.chmod 0777, "#{$test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}/#{TESTFILE_SUB}"
-    FileUtils.chmod 0777, "#{$test_server.share_path}/#{TEST_DIRECTORY}/#{TEST_SUB_DIRECTORY}"
-    FileUtils.chmod 0777, "#{$test_server.share_path}/#{TEST_DIRECTORY}"
-    FileUtils.chmod 0777, "#{$test_server.share_path}/#{TESTFILE}"
-    @sambal_client = described_class.new(host: $test_server.host, share: $test_server.share_name, port: $test_server.port, logger: $logger, connection_timeout: 1)
-    @sambal_client.cd('/')
-    expect(@sambal_client.current_dir).to eq('\\')
+    sleep 0.1
   end
 
   after(:each) do
-    @sambal_client.close
+    @samba_client && @samba_client.close
   end
 
   let(:file_to_upload) do
@@ -59,123 +22,135 @@ describe Sambal::Client do
     t
   end
 
+  let(:samba_opts) do
+    {
+      host: $test_server.host,
+      port: $test_server.port,
+      share: $test_server.share_name,
+      logger: $test_server.logger,
+      transcript: $test_server.transcript,
+      connection_timeout: 1
+    }
+  end
+
+  let(:samba_client) { @samba_client=described_class.new(samba_opts) }
+
+  def create_files(files)
+    files.each do |file|
+      file_parts = Pathname.new(file).split
+      file_parts[0..-2].each{|d| samba_client.mkdir(d.to_s); samba_client.cd(d.to_s)}
+      samba_client.put_content('test', file_parts.last.to_s)
+      samba_client.cd("/")
+    end
+  end
+
   describe 'new' do
     it 'should raise an exception if the port is unreachable' do
-      expect{ described_class.new(host: $test_server.host, share: $test_server.share_name, port: $test_server.port + 1) }.to raise_error('NT_STATUS_CONNECTION_REFUSED')
+      expect{ described_class.new(samba_opts.merge(port: $test_server.port + 1)) }.to raise_error('NT_STATUS_CONNECTION_REFUSED')
     end
     it 'should raise an exception if the port is unreachable' do
-      expect{ described_class.new(host: 'example.com', share: $test_server.share_name, port: $test_server.port, connection_timeout: 1) }.to raise_error('Connection Timeout')
+      expect{ described_class.new(samba_opts.merge(host: 'example.com')) }.to raise_error('Connection Timeout')
     end
     it 'should raise an exception if the share is unreachable' do
-      expect{ described_class.new(host: $test_server.host, share: 'not_here', port: $test_server.port) }.to raise_error('NT_STATUS_BAD_NETWORK_NAME')
+      expect{ described_class.new(samba_opts.merge(share: 'not_here')) }.to raise_error('NT_STATUS_BAD_NETWORK_NAME')
     end
   end
 
   describe 'ls' do
-    before(:all) do
-      FileUtils.cp "#{$test_server.share_path}/#{TESTFILE}", "#{$test_server.share_path}/#{TESTFILE2}"
-      FileUtils.cp "#{$test_server.share_path}/#{TESTFILE}", "#{$test_server.share_path}/#{TESTFILE3}"
-    end
-
     it "should list files with spaces in their names" do
-      result = @sambal_client.ls
-      expect(result).to have_key(TEST_DIRECTORY_WITH_SPACE_IN_NAME)
-      expect(result).to have_key(TEST_DIRECTORY_WITH_CONSECUTIVE_SPACES_IN_NAME)
+      directories_with_spaces = [
+        'my dir with spaces in name',
+        'my dir with   consecutive spaces in name'
+      ]
+
+      directories_with_spaces.each{|d| samba_client.mkdir(d) }
+
+      result = samba_client.ls
+
+      directories_with_spaces.each{|d| expect(result).to have_key(d) }
     end
 
     it "should list files on an smb server" do
-      result = @sambal_client.ls
-      expect(result).to have_key(TESTFILE)
-      expect(result).to have_key(TESTFILE2)
-      expect(result).to have_key(TESTFILE3)
+      files = %w(testfile1.txt testfile2.txt testfile3.txt)
+      create_files(files)
+
+      result = samba_client.ls
+
+      files.each{|f| expect(result).to have_key(f) }
     end
 
     it "should list files using a wildcard on an smb server" do
-      result = @sambal_client.ls '*.txt'
-      expect(result).to have_key(TESTFILE)
-      expect(result).to_not have_key(TESTFILE2)
-      expect(result).to have_key(TESTFILE3)
+      files = %w(testfile1.txt testfile2.txt testfile3.txt testfile.exe)
+      create_files(files)
+
+      result = samba_client.ls '*.txt'
+      expect(result).to have_key('testfile1.txt')
+      expect(result).to have_key('testfile2.txt')
+      expect(result).to_not have_key('testfile.exe')
     end
   end
 
   describe 'exists?' do
     it "returns true if a file or directory exists at a given path" do
-      expect(@sambal_client.exists?(TESTFILE)).to eq(true)
-      expect(@sambal_client.exists?(TESTFILE_SUB_PATH)).to eq(true)
-      expect(@sambal_client.exists?(TEST_DIRECTORY)).to eq(true)
-      expect(@sambal_client.exists?(SUB_DIRECTORY_PATH)).to eq(true)
+      files = %w(testfile.txt subdir/testfile.txt)
+      files.each{|file| expect(samba_client.exists?(file)).to eq(false) }
+      create_files(files)
+      expect(samba_client.exists?('subdir')).to eq(true)
+      files.each{|file| expect(samba_client.exists?(file)).to eq(true) }
     end
 
     it "returns false if nothing exists at a given path" do
-      expect(@sambal_client.exists?('non_existing_file.txt')).to eq(false)
-      expect(@sambal_client.exists?('non_existing_directory')).to eq(false)
+      %w(non_existing_file.txt non_existing_directory non_existing_directory/non_existing_file.txt).each do |f|
+        expect(samba_client.exists?(f)).to eq(false)
+      end
     end
   end
 
   describe 'mkdir' do
-    before(:each) do
-      @sambal_client.cd('/')
-      expect(@sambal_client.current_dir).to eq('\\')
-    end
-
     it 'should create a new directory' do
-      result = @sambal_client.mkdir('test')
-      expect(result).to be_successful
-
-      expect(@sambal_client.ls).to have_key('test')
-    end
-
-    it 'should create a directory with spaces' do
-      result = @sambal_client.mkdir('test spaces directory')
-      expect(result).to be_successful
-      expect(@sambal_client.ls).to have_key('test spaces directory')
+      ['test', 'test test'].each do |dir|
+        result = samba_client.mkdir(dir)
+        expect(result).to be_successful
+        expect(samba_client.ls).to have_key(dir)
+      end
     end
 
     it 'should not create an invalid directory' do
-      result = @sambal_client.mkdir('**')
+      result = samba_client.mkdir('**')
       expect(result).to_not be_successful
     end
 
     it 'should not overwrite an existing directory' do
-      # Ensure our test directory exists
-      @sambal_client.rmdir('test')
-      @sambal_client.mkdir('test')
-      expect(@sambal_client.ls).to have_key('test')
-
-      result = @sambal_client.mkdir('test')
-      expect(result).to_not be_successful
+      expect(samba_client.mkdir('test')).to be_successful
+      expect(samba_client.ls).to have_key('test')
+      expect(samba_client.mkdir('test')).to_not be_successful
     end
 
     it 'should handle empty directory names' do
-      expect(@sambal_client.mkdir('')).to_not be_successful
-      expect(@sambal_client.mkdir('   ')).to_not be_successful
+      expect(samba_client.mkdir('')).to_not be_successful
+      expect(samba_client.mkdir('   ')).to_not be_successful
     end
   end
 
   it "should get files from an smb server" do
-    expect(@sambal_client.get(TESTFILE, "/tmp/sambal_spec_testfile.txt")).to be_successful
-    expect(File.exists?("/tmp/sambal_spec_testfile.txt")).to eq true
-    expect(File.size("/tmp/sambal_spec_testfile.txt")).to eq @sambal_client.ls[TESTFILE][:size].to_i
-  end
+    files = [
+      'testfile.txt',
+      'subdir/testfile.txt',
+      'space dir/testfile.txt',
+      'subdir/space file.txt'
+    ]
 
-  it "should get files in a dir with spaces in it's name from an smb server" do
-    expect(@sambal_client.get(TEST_SPACES_IN_NAME_PATH, "/tmp/sambal_this_file_was_in_dir_with_spaces.txt")).to be_successful
-    expect(File.exists?("/tmp/sambal_this_file_was_in_dir_with_spaces.txt")).to eq true
-    @sambal_client.cd(TEST_DIRECTORY_WITH_SPACE_IN_NAME)
-    expect(@sambal_client.current_dir).to eq('\\' + TEST_DIRECTORY_WITH_SPACE_IN_NAME + '\\')
-    expect(File.size("/tmp/sambal_this_file_was_in_dir_with_spaces.txt")).to eq @sambal_client.ls[TEST_FILE_IN_DIRECTORY_WITH_SPACE_IN_NAME][:size].to_i
-  end
+    create_files(files)
 
-  it "should get files in a subdirectory while in a higher level directory from an smb server" do
-    expect(@sambal_client.get(TESTFILE_SUB_PATH, "/tmp/sambal_spec_testfile_sub.txt")).to be_successful
-    expect(File.exists?("/tmp/sambal_spec_testfile_sub.txt")).to eq true
-    @sambal_client.cd(SUB_DIRECTORY_PATH)
-    expect(@sambal_client.current_dir).to eq('\\' + SUB_DIRECTORY_PATH.gsub('/', '\\') + '\\')
-    expect(File.size("/tmp/sambal_spec_testfile_sub.txt")).to eq @sambal_client.ls[TESTFILE_SUB][:size].to_i
+    files.each do |f|
+      expect(samba_client.get(f, "/tmp/sambal_spec_testfile.txt")).to be_successful
+      expect(File.exists?("/tmp/sambal_spec_testfile.txt")).to eq true
+      expect(File.read("/tmp/sambal_spec_testfile.txt")).to eq 'test'
+    end
   end
 
   it "should not be successful when getting a file from an smb server fails" do
-    result = @sambal_client.get("non_existant_file.txt", "/tmp/sambal_spec_non_existant_file.txt")
+    result = samba_client.get("non_existant_file.txt", "/tmp/sambal_spec_non_existant_file.txt")
     expect(result).to_not be_successful
     expect(result.message).to match(/^NT_.*$/)
     expect(result.message.split("\n").size).to eq 1
@@ -183,87 +158,81 @@ describe Sambal::Client do
   end
 
   it "should upload files to an smb server" do
-    expect(@sambal_client.ls).to_not have_key("uploaded_file.txt")
-    expect(@sambal_client.put(file_to_upload.path, 'uploaded_file.txt')).to be_successful
-    expect(@sambal_client.ls).to have_key("uploaded_file.txt")
+    expect(samba_client.ls).to_not have_key("uploaded_file.txt")
+    expect(samba_client.put(file_to_upload.path, 'uploaded_file.txt')).to be_successful
+    expect(samba_client.ls).to have_key("uploaded_file.txt")
   end
 
   it "should upload content to an smb server" do
-    expect(@sambal_client.ls).to_not have_key("content_uploaded_file.txt")
-    expect(@sambal_client.put_content("Content upload", 'content_uploaded_file.txt')).to be_successful
-    expect(@sambal_client.ls).to have_key("content_uploaded_file.txt")
+    expect(samba_client.ls).to_not have_key("content_uploaded_file.txt")
+    expect(samba_client.put_content("Content upload", 'content_uploaded_file.txt')).to be_successful
+    expect(samba_client.ls).to have_key("content_uploaded_file.txt")
   end
 
   it "should delete files on an smb server" do
-    expect(@sambal_client.del(TESTFILE)).to be_successful
-    expect(@sambal_client.ls).to_not have_key(TESTFILE)
+    create_files(%w(testfile.txt))
+    expect(samba_client.del('testfile.txt')).to be_successful
+    expect(samba_client.ls).to_not have_key('testfile.txt')
   end
 
   it "should not be successful when deleting a file from an smb server fails" do
-    result = @sambal_client.del("non_existant_file.txt")
+    result = samba_client.del("non_existant_file.txt")
     expect(result).to_not be_successful
     expect(result.message).to match(/^NT_.*$/)
     expect(result.message.split("\n").size).to eq 1
   end
 
   it "should switch directory on an smb server" do
-    expect(@sambal_client.put_content("testing directories", 'dirtest.txt')).to be_successful ## a bit stupid, but now we can check that this isn't listed when we switch dirs
-    expect(@sambal_client.ls).to have_key('dirtest.txt')
-    expect(@sambal_client.cd(TEST_DIRECTORY)).to be_successful
-    expect(@sambal_client.ls).to_not have_key('dirtest.txt')
-    expect(@sambal_client.put_content("in #{TEST_DIRECTORY}", 'intestdir.txt')).to be_successful
-    expect(@sambal_client.ls).to have_key('intestdir.txt')
-    expect(@sambal_client.cd('..')).to be_successful
-    expect(@sambal_client.ls).to_not have_key('intestdir.txt')
-    expect(@sambal_client.ls).to have_key('dirtest.txt')
+    samba_client.mkdir('subdir')
+    expect(samba_client.put_content("testing directories", 'dirtest.txt')).to be_successful ## a bit stupid, but now we can check that this isn't listed when we switch dirs
+    expect(samba_client.ls).to have_key('dirtest.txt')
+    expect(samba_client.cd('subdir')).to be_successful
+    expect(samba_client.ls).to_not have_key('dirtest.txt')
+    expect(samba_client.put_content("in subdir", 'intestdir.txt')).to be_successful
+    expect(samba_client.ls).to have_key('intestdir.txt')
+    expect(samba_client.cd('..')).to be_successful
+    expect(samba_client.ls).to_not have_key('intestdir.txt')
+    expect(samba_client.ls).to have_key('dirtest.txt')
   end
 
   it "should be support directories at and above the column limit" do
     10.upto(200).each do |number|
-      @sambal_client.cd("\\#{'x' * number}")
+      expect(samba_client.mkdir("\\#{'x' * number}")).to be_successful
+      expect(samba_client.cd("\\#{'x' * number}")).to be_successful
+      expect(samba_client.cd("\\")).to be_successful
     end
   end
 
   it "should delete files in subdirectory while in a higher level directory" do
-    @sambal_client.cd('/')
-    @sambal_client.cd(TEST_DIRECTORY)
-    expect(@sambal_client.put_content("some content", "file_to_delete")).to be_successful
-    @sambal_client.cd('/')
-    expect(@sambal_client.del("#{TEST_DIRECTORY}/file_to_delete")).to be_successful
-    @sambal_client.cd('/')
-    expect(@sambal_client.ls).to have_key("#{TESTFILE}")
+    create_files(%w(testdir/file_to_delete))
+    expect(samba_client.del("testdir/file_to_delete")).to be_successful
+    expect(samba_client.exists?('testdir/file_to_delete')).to be false
   end
 
   it "should recursively delete a directory" do
-    @sambal_client.cd('/')
-    @sambal_client.cd(TEST_DIRECTORY)
-    expect(@sambal_client.put_content("some content", "file_to_delete")).to be_successful
-    @sambal_client.cd('/')
-    expect(@sambal_client.rmdir("#{TEST_DIRECTORY}")).to be_successful
-    @sambal_client.cd('/')
-    expect(@sambal_client.ls).to_not have_key("#{TEST_DIRECTORY}")
+    create_files(%w(testdire/file_to_delete))
+    expect(samba_client.rmdir("testdire")).to be_successful
+    expect(samba_client.ls).to_not have_key("testdire")
   end
 
   it "should not be successful when recursively deleting a nonexistant directory" do
-    @sambal_client.cd('/')
-    expect(@sambal_client.rmdir("this_doesnt_exist")).to_not be_successful
+    expect(samba_client.rmdir("this_doesnt_exist")).to_not be_successful
   end
 
   it "should not be successful when command fails" do
-    result = @sambal_client.put("jhfahsf iasifasifh", "jsfijsf ijidjag")
-    expect(result).to_not be_successful
+    expect(samba_client.put("jhfahsf iasifasifh", "jsfijsf ijidjag")).to_not be_successful
   end
 
   it 'should create commands with one wrapped filename' do
-    expect(@sambal_client.send(:wrap_filenames, 'cmd','file1')).to eq('cmd "file1"')
+    expect(samba_client.send(:wrap_filenames, 'cmd','file1')).to eq('cmd "file1"')
   end
 
   it 'should create commands with more than one wrapped filename' do
-    expect(@sambal_client.send(:wrap_filenames, 'cmd',['file1','file2'])).to eq('cmd "file1" "file2"')
+    expect(samba_client.send(:wrap_filenames, 'cmd',['file1','file2'])).to eq('cmd "file1" "file2"')
   end
 
   it 'should create commands with pathnames instead of strings' do
-    expect(@sambal_client.send(:wrap_filenames,'cmd',[Pathname.new('file1'), Pathname.new('file2')])).to eq('cmd "file1" "file2"')
+    expect(samba_client.send(:wrap_filenames,'cmd',[Pathname.new('file1'), Pathname.new('file2')])).to eq('cmd "file1" "file2"')
   end
 
 end

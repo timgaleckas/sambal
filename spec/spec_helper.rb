@@ -37,9 +37,16 @@ RSpec.configure do |config|
   #config.formatter = 'd'
 
   config.before(:suite) do
-    $logger = Logger.new('/dev/null')
-    $logger.level = Logger::DEBUG
-    $test_server = Sambal::TestServer.new(logger: $logger)
+
+    $test_server = Sambal::TestServer.new(
+      if ENV['DEBUG']
+        logger = Logger.new($stdout)
+        logger.level = 0
+        {logger: logger, transcript: $stdout}
+      else
+        {}
+      end
+    )
     $test_server.start
   end
 

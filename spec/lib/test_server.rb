@@ -18,22 +18,27 @@ module Sambal
       end
     end
 
-    attr_reader :port
-    attr_reader :share_path
-    attr_reader :root_path
-    attr_reader :tmp_path
-    attr_reader :private_dir
     attr_reader :cache_dir
-    attr_reader :state_dir
     attr_reader :config_path
-    attr_reader :share_name
-    attr_reader :run_as
     attr_reader :host
+    attr_reader :logger
+    attr_reader :port
+    attr_reader :private_dir
+    attr_reader :root_path
+    attr_reader :run_as
+    attr_reader :share_name
+    attr_reader :share_path
+    attr_reader :state_dir
+    attr_reader :tmp_path
+    attr_reader :transcript
+
+    NULL_LOGGER = Logger.new('/dev/null')
 
     DEFAULT_OPTS = {
       share_name: 'sambal_test',
       run_as: ENV['USER'],
-      logger: Logger.new('/dev/null')
+      logger: NULL_LOGGER,
+      transcript: NULL_LOGGER
     }
 
     def initialize(_opts={})
@@ -56,6 +61,7 @@ module Sambal
       @port = Random.new(Time.now.to_i).rand(2345..5678).to_i
       @run_as = opts[:run_as]
       @logger = opts[:logger]
+      @transcript = opts[:transcript]
       FileUtils.mkdir_p @share_path
       File.chmod 0777, @share_path
       write_config
@@ -72,7 +78,7 @@ module Sambal
         "--option=\"lockdir\"=#{@lock_path} --option=\"pid directory\"=#{@pid_dir} " +
         "--option=\"private directory\"=#{@private_dir} --option=\"cache directory\"=#{@cache_dir} " +
         "--option=\"state directory\"=#{@state_dir}"
-      @server = Amberletters::Process.new(command, transcript: @logger, logger: @logger)
+      @server = Amberletters::Process.new(command, transcript: @transcript, logger: @logger)
       @server.start!
       @server.wait_for(:output, /ready to serve connections/)
     end
@@ -80,6 +86,10 @@ module Sambal
     def stop!
       @server.kill!
       FileUtils.rm_rf @tmp_path unless ENV.key?('KEEP_SMB_TMP')
+    end
+
+    def clean!
+      FileUtils.rm_rf(share_path + '/*')
     end
   end
 end
