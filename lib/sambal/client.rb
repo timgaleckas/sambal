@@ -25,8 +25,10 @@ module Sambal
     def initialize(options={})
       options = DEFAULT_OPTIONS.merge(options)
 
+      smbclient_cli = options[:smbclient_cli] || 'smbclient'
+
       password = options[:password] ? "'#{options[:password]}'" : "--no-pass"
-      command = "COLUMNS=800 LC_CTYPE=en_US.UTF-8 TERM=xterm-256color smbclient \"//#{options[:host]}/#{options[:share]}\" #{password}"
+      command = "COLUMNS=800 LC_CTYPE=en_US.UTF-8 TERM=xterm-256color #{smbclient_cli} \"//#{options[:host]}/#{options[:share]}\" #{password}"
       command += " -W \"#{options[:domain]}\" -U \"#{options[:user]}\""
       command += " -I #{options[:ip_address]}" if options[:ip_address]
       command += " -p #{options[:port]} -s /dev/null"
@@ -105,7 +107,7 @@ module Sambal
     def mkdir(directory, opts={})
       return Response.new('directory name is empty', false) if directory.strip.empty?
       response = ask_wrapped('mkdir', directory, opts)
-      if response =~ /NT_STATUS_OBJECT_NAME_(INVALID|COLLISION)/
+      if response =~ /NT_STATUS_OBJECT_(PATH_NOT_FOUND|NAME_INVALID|NAME_COLLISION)/
         Response.new(response, false)
       else
         Response.new(response, true)

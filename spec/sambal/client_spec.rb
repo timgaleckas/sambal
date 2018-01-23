@@ -108,11 +108,17 @@ describe Sambal::Client do
 
   describe 'mkdir' do
     it 'should create a new directory' do
-      ['test', 'test test'].each do |dir|
+      ['test', 'test test', '\\test2'].each do |dir|
         result = samba_client.mkdir(dir)
         expect(result).to be_successful
-        expect(samba_client.ls).to have_key(dir)
+        expect(samba_client.ls).to have_key(dir.split('\\').reject{|d| d.empty?}.first)
       end
+    end
+
+
+    it 'does not create sub directories all the way down' do
+      result = samba_client.mkdir('\\test3\\test3')
+      expect(result).to_not be_successful
     end
 
     it 'should not create an invalid directory' do
