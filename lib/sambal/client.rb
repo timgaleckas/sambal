@@ -131,7 +131,11 @@ module Sambal
       response = cd '..', opts
       return response if response.failure?
       response = ask_wrapped 'rmdir', dir, opts
-      Response.new(response, true)
+      if response =~ /NT_STATUS_DIRECTORY_NOT_EMPTY/
+        Response.new(response, false)
+      else
+        Response.new(response, true)
+      end
     end
 
     def del(filename, opts={})
